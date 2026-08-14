@@ -91,7 +91,7 @@ final class CalendarService {
             return
         }
         lastRemotePull = now
-        Log.calendar.debug("pulling remote sources (force: \(force, privacy: .public))")
+        Log.calendar.info("asking EventKit to sync the accounts (forced: \(force, privacy: .public))")
         store.refreshSourcesIfNecessary()
     }
 

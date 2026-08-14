@@ -114,8 +114,18 @@ final class AppState {
                 self.calendar.pullRemoteSources(throttle: self.cadence.remote)
                 self.calendar.refresh()
                 self.tick()
+                self.logHeartbeat()
             }
         }
+    }
+
+    /// A quiet calendar and a dead refresh loop look identical from the
+    /// outside, so the loop says so every time it runs.
+    private func logHeartbeat() {
+        let age = calendar.lastRemotePull.map { Int(Date().timeIntervalSince($0)) } ?? -1
+        let phase = String(describing: urgency.phase)
+        let count = calendar.events.count
+        Log.calendar.info("poll: \(count, privacy: .public) events, phase \(phase, privacy: .public), account sync \(age, privacy: .public)s ago")
     }
 
     /// How hard to work at staying current, based on how close the next thing
