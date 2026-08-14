@@ -1,0 +1,30 @@
+name: Build
+
+# Catches breakage before you go to tag a release.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select the newest installed Xcode
+        run: |
+          LATEST="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)"
+          if [[ -n "$LATEST" ]]; then sudo xcode-select -switch "$LATEST"; fi
+          swift --version
+
+      - name: Build the app bundle
+        run: ./build.sh
+
+      - name: Verify the bundle
+        run: |
+          codesign --verify --deep --strict dist/Mind.app
+          test -f dist/Mind.app/Contents/Resources/AppIcon.icns

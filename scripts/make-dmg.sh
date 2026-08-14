@@ -1,0 +1,74 @@
+#!/bin/bash
+# Packages dist/Mind.app into a distributable disk image.
+#
+#   ./scripts/make-dmg.sh [version]
+#
+# Produces dist/Mind-<version>.dmg containing Mind.app next to an /Applications
+# symlink, which is all the "installer" a menu bar app needs. If the app hasn't
+# been built yet, this builds it first.
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+VERSION="${1:-}"
+APP="dist/Mind.app"
+
+if [[ -z "$VERSION" ]]; then
+	VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+fi
+
+if [[ ! -d "$APP" ]]; then
+	echo "==> Mind.app not found, building it"
+	./build.sh
+fi
+
+STAGING="dist/dmg-staging"
+DMG="dist/Mind-$VERSION.dmg"
+
+echo "==> Staging $VERSION"
+rm -rf "$STAGING" "$DMG"
+mkdir -p "$STAGING"
+cp -R "$APP" "$STAGING/Mind.app"
+ln -s /Applications "$STAGING/Applications"
+
+# A short read-me in the image itself, since an ad-hoc signed app gets the
+# "unidentified developer" treatment on first open.
+cat > "$STAGING/Read Me.txt" <<'TXT'
+Mind
+
+1. Drag Mind.app onto the Applications folder.
+2. The first launch will be blocked because this build is ad-hoc signed rather
+   than notarised. Right-click Mind.app -> Open, then confirm. You only have to
+   do this once.
+3. Mind will ask for calendar access. It only ever reads your calendar.
+
+Mind lives in the menu bar and in a small floating panel. Drag the panel to move
+it, drag its bottom-right grip to resize, right-click it for options.
+TXT
+
+echo "==> Building $DMG"
+hdiutil create \
+	-volname "Mind $VERSION" \
+	-srcfolder "$STAGING" \
+	-ov \
+	-format UDZO \
+	-imagekey zlib-level=9 \
+	"$DMG" >/dev/null
+
+rm -rf "$STAGING"
+
+SIZE="$(du -h "$DMG" | cut -f1 | tr -d ' ')"
+SHA="$(shasum -a 256 "$DMG" | cut -d' ' -f1)"
+
+echo "==> Done: $DMG ($SIZE)"
+echo "    sha256: $SHA"
+
+# Handy for CI, which reads these back out of the step output.
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+	{
+		echo "dmg=$DMG"
+		echo "version=$VERSION"
+		echo "sha256=$SHA"
+		echo "size=$SIZE"
+	} >> "$GITHUB_OUTPUT"
+fi

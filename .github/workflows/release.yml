@@ -1,0 +1,141 @@
+name: Release
+
+# Tag a release to publish a DMG:
+#
+#   git tag v1.0.1 && git push origin v1.0.1
+#
+# Or run this workflow by hand from the Actions tab with a version number. The
+# DMG lands in the public Tigris bucket at:
+#
+#   https://mind-releases.t3.storage.dev/Mind-<version>.dmg
+#   https://mind-releases.t3.storage.dev/Mind-latest.dmg
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (e.g. 1.0.1)"
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TIGRIS_BUCKET: mind-releases
+  TIGRIS_ENDPOINT: https://t3.storage.dev
+  AWS_REGION: auto
+  # Tigris does not implement the trailing checksum headers the newer AWS CLI
+  # sends by default, so keep the CLI on the classic signing behaviour.
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::'$VERSION' is not a version number like 1.0.1"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building Mind $VERSION"
+
+      - name: Select the newest installed Xcode
+        run: |
+          LATEST="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)"
+          if [[ -n "$LATEST" ]]; then sudo xcode-select -switch "$LATEST"; fi
+          xcodebuild -version
+          swift --version
+
+      - name: Build universal app
+        run: ./build.sh --universal --version "${{ steps.version.outputs.version }}"
+
+      - name: Verify the bundle
+        run: |
+          APP=dist/Mind.app
+          test -x "$APP/Contents/MacOS/Mind"
+          test -f "$APP/Contents/Resources/AppIcon.icns"
+          codesign --verify --deep --strict "$APP"
+          echo "Architectures: $(lipo -archs "$APP/Contents/MacOS/Mind")"
+          lipo -archs "$APP/Contents/MacOS/Mind" | grep -q arm64
+          lipo -archs "$APP/Contents/MacOS/Mind" | grep -q x86_64
+
+      - name: Package DMG
+        id: dmg
+        run: ./scripts/make-dmg.sh "${{ steps.version.outputs.version }}"
+
+      - name: Upload to Tigris
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          command -v aws >/dev/null || brew install awscli
+
+          VERSION="${{ steps.version.outputs.version }}"
+          DMG="${{ steps.dmg.outputs.dmg }}"
+
+          upload() {
+            aws s3 cp "$1" "s3://$TIGRIS_BUCKET/$2" \
+              --endpoint-url "$TIGRIS_ENDPOINT" \
+              --content-type "$3" \
+              --cache-control "$4"
+          }
+
+          # The versioned copy is immutable, so it can be cached hard. The
+          # "latest" alias changes every release, so it must not be.
+          upload "$DMG" "Mind-$VERSION.dmg" application/x-apple-diskimage "public, max-age=31536000, immutable"
+          upload "$DMG" "Mind-latest.dmg" application/x-apple-diskimage "public, max-age=60"
+
+          # A tiny manifest, so a future "check for updates" has something to read.
+          cat > latest.json <<JSON
+          {
+            "version": "$VERSION",
+            "url": "https://$TIGRIS_BUCKET.t3.storage.dev/Mind-$VERSION.dmg",
+            "sha256": "${{ steps.dmg.outputs.sha256 }}",
+            "size": "${{ steps.dmg.outputs.size }}",
+            "published": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "commit": "$GITHUB_SHA"
+          }
+          JSON
+          upload latest.json "latest.json" application/json "public, max-age=60"
+
+      - name: Summary
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BASE="https://$TIGRIS_BUCKET.t3.storage.dev"
+          {
+            echo "## Mind $VERSION"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Download | [$BASE/Mind-$VERSION.dmg]($BASE/Mind-$VERSION.dmg) |"
+            echo "| Latest alias | [$BASE/Mind-latest.dmg]($BASE/Mind-latest.dmg) |"
+            echo "| Manifest | [$BASE/latest.json]($BASE/latest.json) |"
+            echo "| Size | ${{ steps.dmg.outputs.size }} |"
+            echo "| SHA-256 | \`${{ steps.dmg.outputs.sha256 }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the DMG as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mind-${{ steps.version.outputs.version }}
+          path: ${{ steps.dmg.outputs.dmg }}
+          retention-days: 30
