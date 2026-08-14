@@ -29,6 +29,8 @@ final class CalendarService {
     private(set) var events: [AgendaEvent] = []
     private(set) var calendars: [CalendarInfo] = []
     private(set) var lastRefresh: Date?
+    /// When we last asked EventKit to go and talk to the remote accounts.
+    private(set) var lastRemotePull: Date?
     private(set) var lastError: String?
 
     private let store = EKEventStore()
@@ -72,6 +74,33 @@ final class CalendarService {
 
     // MARK: Reading
 
+    /// Ask EventKit to sync the remote accounts.
+    ///
+    /// This is the difference between "fresh" and "whatever macOS last felt
+    /// like fetching". `EKEventStore` reads a *local* database; when you move an
+    /// event on your phone or in a web UI, that database doesn't change until
+    /// CalendarAgent syncs, which on its own schedule can be many minutes. Every
+    /// poll in the world won't see a change that hasn't landed locally yet.
+    ///
+    /// EventKit rate-limits this internally, and we throttle on top of it so a
+    /// tight countdown loop doesn't hammer the accounts.
+    func pullRemoteSources(throttle: TimeInterval, force: Bool = false) {
+        guard access == .granted else { return }
+        let now = Date()
+        if !force, let last = lastRemotePull, now.timeIntervalSince(last) < throttle {
+            return
+        }
+        lastRemotePull = now
+        Log.calendar.debug("pulling remote sources (force: \(force, privacy: .public))")
+        store.refreshSourcesIfNecessary()
+    }
+
+    /// Drops EventKit's cached objects so the next fetch re-reads the database.
+    /// Called when we've been told something changed underneath us.
+    func invalidateCache() {
+        store.reset()
+    }
+
     func refresh() {
         access = Self.currentAccess()
         guard access == .granted else {
@@ -105,13 +134,22 @@ final class CalendarService {
         let end = now.addingTimeInterval(max(prefs.horizonHours, 1) * 3600 + 3600)
         let predicate = store.predicateForEvents(withStart: start, end: end, calendars: included)
 
-        let raw = store.events(matching: predicate)
-        events = raw
-            .filter { keep($0, now: now) }
-            .map { Self.makeAgendaEvent($0) }
-            .sorted { lhs, rhs in
-                lhs.start == rhs.start ? lhs.title < rhs.title : lhs.start < rhs.start
+        let raw: [EKEvent] = store.events(matching: predicate)
+        let kept: [EKEvent] = raw.filter { keep($0, now: now) }
+        var fetched: [AgendaEvent] = kept.map { Self.makeAgendaEvent($0) }
+        fetched.sort { lhs, rhs in
+            lhs.start == rhs.start ? lhs.title < rhs.title : lhs.start < rhs.start
+        }
+
+        // Only log when something actually moved, so the stream stays readable
+        // while still proving the loop is alive.
+        if fetched != events {
+            Log.calendar.info("agenda changed: \(fetched.count, privacy: .public) events in horizon")
+            for event in fetched.prefix(5) {
+                Log.calendar.debug("  \(event.start, privacy: .public) \(event.title, privacy: .private)")
             }
+        }
+        events = fetched
         lastRefresh = now
     }
 

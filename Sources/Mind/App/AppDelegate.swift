@@ -72,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func wireActions() {
         AppActions.openPreferences = { [weak self] in self?.showPreferences() }
         AppActions.hidePanel = { [weak self] in self?.panelController?.panel.orderOut(nil) }
-        AppActions.refresh = { [weak self] in self?.state.reloadFromPreferences() }
+        AppActions.refresh = { [weak self] in self?.state.refreshNow(reason: "user asked") }
     }
 
     /// Preferences are plain observable state; rather than sprinkle callbacks
@@ -189,7 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func togglePanel() { panelController?.toggleVisibility() }
-    @objc private func refreshNow() { state.reloadFromPreferences() }
+    @objc private func refreshNow() { state.refreshNow(reason: "menu bar") }
     @objc private func showPreferencesMenu() { showPreferences() }
 
     @objc private func applySize(_ sender: NSMenuItem) {

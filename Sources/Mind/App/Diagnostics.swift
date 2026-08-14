@@ -20,6 +20,11 @@ enum Diagnostics {
         }
 
         await state.calendar.requestAccessIfNeeded()
+        // Force a real account sync first — reading the local database without
+        // this is exactly the failure mode these diagnostics exist to catch.
+        state.calendar.pullRemoteSources(throttle: 0, force: true)
+        try? await Task.sleep(for: .seconds(3))
+        state.calendar.invalidateCache()
         state.calendar.refresh()
         state.tick()
 

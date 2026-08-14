@@ -82,7 +82,45 @@ eye without a notification.
 Thresholds are yours to set — Preferences → Timing. Everything downstream
 re-shapes itself around them.
 
-## The panel
+## Staying current
+
+The thing that makes an ambient calendar app useless is being wrong, so there
+are three layers to this.
+
+**Pull the accounts.** `EKEventStore` reads a *local* database. When you move an
+event on your phone or in a web UI, that database doesn't change until macOS
+syncs, which on its own schedule can take many minutes — so polling harder
+achieves exactly nothing. Mind calls `refreshSourcesIfNecessary()` to make the
+sync happen, on launch and on a throttle while running.
+
+**React to changes.** `EKEventStoreChanged` fires the moment a sync lands. Mind
+resets EventKit's object cache and re-reads immediately, so a change usually
+appears within a second or two of macOS learning about it. Waking from sleep,
+switching sessions, activating the app, a clock jump, and the date rolling over
+all force a full refresh too.
+
+**Poll as a backstop**, at a rate that follows how much it matters:
+
+| Next meeting is | Re-read local | Sync accounts |
+| --- | --- | --- |
+| 2 minutes out or starting | every 5s | every 15s |
+| Inside 15 minutes | every 8s | every 20s |
+| Inside an hour | every 12s | every 30s |
+| Further out, or nothing | every 20s | every 45s |
+
+The countdown itself re-computes twice a second off events already in memory —
+that's arithmetic, not a calendar query.
+
+To watch it work:
+
+```sh
+log stream --predicate 'subsystem == "com.joedesigns.mind"' --info
+```
+
+Add `--debug`, after `sudo log config --mode "level:debug" --subsystem com.joedesigns.mind`,
+to also see each remote pull.
+
+## The panel## The panel
 
 - **Drag anywhere** to move it; **drag the corner grip** to resize.
 - **Right-click** for size presets, Preferences, and Quit.

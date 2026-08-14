@@ -104,11 +104,34 @@ final class AppState {
         }
 
         refreshTask = Task { @MainActor [weak self] in
+            // Pull the accounts once at launch so we never start from a stale
+            // database, then settle into the adaptive cadence.
+            self?.calendar.pullRemoteSources(throttle: 0, force: true)
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(30))
-                self?.calendar.refresh()
-                self?.tick()
+                guard let self else { return }
+                try? await Task.sleep(for: .seconds(self.cadence.poll))
+                guard !Task.isCancelled else { return }
+                self.calendar.pullRemoteSources(throttle: self.cadence.remote)
+                self.calendar.refresh()
+                self.tick()
             }
+        }
+    }
+
+    /// How hard to work at staying current, based on how close the next thing
+    /// is. Sitting idle at 5-second remote pulls all day would be rude to both
+    /// the battery and the calendar servers; being lazy in the last five minutes
+    /// before a meeting is exactly when it matters most.
+    ///
+    /// `poll` re-reads the local database. `remote` is the floor between asking
+    /// EventKit to sync the accounts, which is the expensive one.
+    private var cadence: (poll: TimeInterval, remote: TimeInterval) {
+        switch urgency.phase {
+        case .critical, .starting: return (5, 15)
+        case .imminent: return (8, 20)
+        case .approaching: return (12, 30)
+        case .inProgress: return (20, 45)
+        case .distant, .clear: return (20, 45)
         }
     }
 
@@ -129,29 +152,50 @@ final class AppState {
         tick()
     }
 
+    /// Everything the user can do that should produce an instant answer:
+    /// "Refresh Now", waking the machine, coming back to the app. Skips every
+    /// throttle and goes all the way out to the accounts.
+    func refreshNow(reason: String) {
+        Log.calendar.info("forced refresh: \(reason, privacy: .public)")
+        calendar.invalidateCache()
+        calendar.pullRemoteSources(throttle: 0, force: true)
+        calendar.refresh()
+        tick()
+    }
+
     private func observeSystemEvents() {
         let center = NotificationCenter.default
 
+        // The database changed underneath us — usually a sync landing. Drop
+        // EventKit's cached objects before re-reading or we may be handed the
+        // same stale events back.
         center.addObserver(forName: .EKEventStoreChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
+                Log.calendar.info("EKEventStoreChanged")
+                self?.calendar.invalidateCache()
                 self?.calendar.refresh()
                 self?.tick()
             }
         }
 
-        // Laptop lids close. Come back with fresh data rather than a stale count.
+        // Laptop lids close, sessions get switched, clocks jump, days roll over.
+        // Each one can leave us showing something that isn't true any more.
         let workspace = NSWorkspace.shared.notificationCenter
-        workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.calendar.refresh()
-                self?.tick()
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
+            workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.refreshNow(reason: name.rawValue)
+                }
             }
         }
 
-        center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.calendar.refresh()
-                self?.tick()
+        for name in [NSApplication.didBecomeActiveNotification,
+                     .NSSystemClockDidChange,
+                     .NSCalendarDayChanged] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.refreshNow(reason: name.rawValue)
+                }
             }
         }
     }
