@@ -32,6 +32,36 @@ rebuild, so macOS may ask for calendar permission again after a rebuild. That's
 expected. (`Open at login` may also refuse for the same reason until the app is
 signed with a real Developer ID and living in `/Applications`.)
 
+## Releases
+
+Tagging a version builds a universal DMG and publishes it:
+
+```sh
+git tag v1.0.1 && git push origin v1.0.1
+```
+
+There's also a manual run in the Actions tab if you'd rather type a version than
+make a tag. Either way the artifacts land in a public Tigris bucket:
+
+| | |
+| --- | --- |
+| This version | `https://mind-releases.t3.storage.dev/Mind-<version>.dmg` |
+| Always the newest | `https://mind-releases.t3.storage.dev/Mind-latest.dmg` |
+| Version manifest | `https://mind-releases.t3.storage.dev/latest.json` |
+
+The repo is private; those download links are not. `latest.json` carries the
+version, size, SHA-256 and source commit, so a future "check for updates" has
+something to read.
+
+The workflow needs two repo secrets, `TIGRIS_ACCESS_KEY_ID` and
+`TIGRIS_SECRET_ACCESS_KEY`. They belong to a Tigris access key called `mind-ci`
+scoped to Editor on the `mind-releases` bucket and nothing else. To rotate:
+
+```sh
+tigris keys rotate <key-id>
+gh secret set TIGRIS_SECRET_ACCESS_KEY --repo wes/mind
+```
+
 ## How it behaves
 
 Everything in the app is driven by one number: **intensity**, from 0 to 1,
