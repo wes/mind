@@ -88,22 +88,35 @@ struct AmbientView: View {
         // "Clear afternoon" is a lie if we can't read the calendar at all, and
         // a lie is worse than an error: it looks exactly like a free day.
         if state.isDemo || state.calendar.access.isUsable {
-            AgendaOverlay(layout: layout, palette: palette)
+            AgendaOverlay(layout: layout, palette: palette, controlsVisible: controlsVisible)
         } else {
             PermissionView(layout: layout, palette: palette)
         }
     }
 
+    /// The hover controls sit in the same corner as the header clock, so the
+    /// overlay needs to know when to get out of their way.
+    private var controlsVisible: Bool { isHovering && !prefs.clickThrough }
+
     @ViewBuilder
     private func controls(layout: AmbientLayout, palette: Palette) -> some View {
-        if isHovering && !prefs.clickThrough {
+        if controlsVisible {
             VStack {
                 HStack(spacing: 6) {
                     Spacer()
-                    ControlButton(symbol: "gearshape.fill", tint: palette.ink(state.urgency.intensity)) {
+                    RefreshButton(tint: palette.ink(state.urgency.intensity))
+                    ControlButton(
+                        symbol: "gearshape.fill",
+                        tint: palette.ink(state.urgency.intensity),
+                        help: "Preferences"
+                    ) {
                         AppActions.openPreferences()
                     }
-                    ControlButton(symbol: "xmark", tint: palette.ink(state.urgency.intensity)) {
+                    ControlButton(
+                        symbol: "xmark",
+                        tint: palette.ink(state.urgency.intensity),
+                        help: "Hide Mind"
+                    ) {
                         AppActions.hidePanel()
                     }
                 }
@@ -127,6 +140,7 @@ private struct AgendaOverlay: View {
 
     let layout: AmbientLayout
     let palette: Palette
+    let controlsVisible: Bool
 
     private var hasAgenda: Bool {
         layout.agendaRows > 0 && prefs.showAgenda && !state.upcoming.isEmpty
@@ -222,6 +236,8 @@ private struct AgendaOverlay: View {
                     .foregroundStyle(ink.opacity(0.68))
                     .monospacedDigit()
                     .legible(halo: palette.halo(state.urgency.intensity))
+                    .opacity(controlsVisible ? 0 : 1)
+                    .animation(.easeInOut(duration: 0.15), value: controlsVisible)
             }
         }
     }
@@ -402,6 +418,7 @@ private struct PermissionView: View {
 private struct ControlButton: View {
     let symbol: String
     let tint: Color
+    var help: String = ""
     let action: () -> Void
 
     @State private var hovering = false
@@ -418,6 +435,36 @@ private struct ControlButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .help(help)
+    }
+}
+
+/// Forces a full reload: drops EventKit's cache, syncs the accounts, re-reads.
+/// The spin is the receipt — without it there's no way to tell a click that
+/// found nothing new from a click that didn't register.
+private struct RefreshButton: View {
+    let tint: Color
+
+    @State private var hovering = false
+    @State private var turns = 0.0
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.7)) { turns += 1 }
+            AppActions.refresh()
+        } label: {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(tint.opacity(hovering ? 0.95 : 0.6))
+                .rotationEffect(.degrees(turns * 360))
+                .frame(width: 18, height: 18)
+                .background(
+                    Circle().fill(.ultraThinMaterial.opacity(hovering ? 0.9 : 0.5))
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("Refresh calendar now")
     }
 }
 
