@@ -61,3 +61,79 @@ enum Diagnostics {
         }
     }
 }
+
+/// Answers one question: when an event appears in the calendar, which kind of
+/// `EKEventStore` sees it?
+///
+///     open -n --env MIND_WATCH=/tmp/mind-watch.txt /Applications/Mind.app
+///     tail -f /tmp/mind-watch.txt
+///
+/// Then add an event. Three columns, all querying the same window in the same
+/// process, every few seconds:
+///
+///   cached      a long-lived store, never reset — what Mind used to do
+///   afterReset  a long-lived store with reset() before each read — the fix
+///   freshStore  a brand new store each time — equivalent to relaunching
+///
+/// Whichever columns move tell you where the staleness lives.
+@MainActor
+enum StoreWatch {
+    static func run(outputPath: String) async {
+        let cachedStore = EKEventStore()
+        let resetStore = EKEventStore()
+
+        do {
+            _ = try await cachedStore.requestFullAccessToEvents()
+            _ = try await resetStore.requestFullAccessToEvents()
+        } catch {
+            append("could not get calendar access: \(error.localizedDescription)", to: outputPath)
+            return
+        }
+
+        // Prime the long-lived stores so they have something to be stale about.
+        _ = count(in: cachedStore)
+        append("watching. cached / afterReset / freshStore — add an event now.", to: outputPath)
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+
+        while !Task.isCancelled {
+            let cached = count(in: cachedStore)
+
+            resetStore.reset()
+            let afterReset = count(in: resetStore)
+
+            let freshStore = EKEventStore()
+            let fresh = count(in: freshStore)
+
+            let line = "\(formatter.string(from: Date()))  cached=\(cached)  afterReset=\(afterReset)  freshStore=\(fresh)"
+            append(line, to: outputPath)
+
+            try? await Task.sleep(for: .seconds(5))
+        }
+    }
+
+    /// Deliberately unfiltered: this is about cache freshness, not about which
+    /// events Mind chooses to show.
+    private static func count(in store: EKEventStore) -> Int {
+        let now = Date()
+        let predicate = store.predicateForEvents(
+            withStart: now.addingTimeInterval(-3600),
+            end: now.addingTimeInterval(24 * 3600),
+            calendars: nil
+        )
+        return store.events(matching: predicate).count
+    }
+
+    private static func append(_ line: String, to path: String) {
+        Swift.print(line)
+        guard let data = (line + "\n").data(using: .utf8) else { return }
+        if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: path))
+        }
+    }
+}

@@ -117,8 +117,12 @@ To watch it work:
 log stream --predicate 'subsystem == "com.joedesigns.mind"' --info
 ```
 
-Add `--debug`, after `sudo log config --mode "level:debug" --subsystem com.joedesigns.mind`,
-to also see each remote pull.
+Every poll logs a heartbeat, so a quiet calendar and a dead refresh loop don't
+look the same:
+
+```
+poll: 2 events, phase distant, account sync 20s ago
+```
 
 ## The panel## The panel
 
@@ -160,6 +164,22 @@ The two pieces worth knowing:
   what a calendar is, which is why the Motion preview can drive it from a slider.
 
 ## Development
+
+**Always test through the app bundle, never the bare binary.** `swift build`
+produces `.build/.../Mind`, which has no `Info.plist`, no bundle identifier and
+no signature — macOS will not grant calendar access to it, so it silently sees
+zero events. Mind now detects this and says so in the panel instead of showing a
+convincing "Clear afternoon", but the fix is to run:
+
+```sh
+./build.sh --run        # builds the bundle and launches it
+./build.sh --install    # or replace /Applications/Mind.app
+```
+
+Only one copy runs at a time. A second launch hands over to the first and exits,
+so a freshly built copy can't end up stacked pixel-on-pixel over an installed
+one — which is exactly how you end up debugging a panel that was never the one
+you were changing. Preferences → Calendars shows the path of the running copy.
 
 ```sh
 MIND_DEMO=9 dist/Mind.app/Contents/MacOS/Mind

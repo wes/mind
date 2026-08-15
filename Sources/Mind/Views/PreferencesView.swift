@@ -119,6 +119,22 @@ private struct CalendarsTab: View {
                             .foregroundStyle(.orange)
                         Button("Open Privacy Settings") { AppActions.openCalendarPrivacySettings() }
                     }
+                case .unavailable(let problem):
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("This build can't read calendars", systemImage: "xmark.octagon.fill")
+                            .foregroundStyle(.red)
+                        Text(problem).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                // When two copies are running, this is the line that tells you
+                // which one you're actually looking at.
+                LabeledContent("Running from") {
+                    Text(Bundle.main.bundlePath)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                        .truncationMode(.head)
                 }
                 Text("Mind reads events only. It never creates, edits, or deletes anything.")
                     .font(.caption)

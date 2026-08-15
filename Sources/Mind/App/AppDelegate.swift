@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import SwiftUI
 
 @MainActor
@@ -14,6 +15,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu-bar-and-panel app: no Dock icon, no window restoration surprises.
         NSApp.setActivationPolicy(.accessory)
+
+        // Troubleshooting hook: watch which EKEventStore flavour sees new events.
+        if let watchPath = ProcessInfo.processInfo.environment["MIND_WATCH"] {
+            Task { @MainActor in await StoreWatch.run(outputPath: watchPath) }
+            return
+        }
 
         // Troubleshooting hook: print what Mind can actually see, then quit.
         if ProcessInfo.processInfo.environment["MIND_DIAGNOSE"] != nil {
@@ -33,6 +40,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // Two copies of an ambient panel is a debugging nightmare: they stack
+        // pixel-on-pixel and you have no idea which one you're reading. If one
+        // is already up, hand over to it and get out of the way.
+        if let existing = otherRunningInstance() {
+            Log.calendar.info("another Mind is already running (pid \(existing.processIdentifier, privacy: .public)); exiting")
+            existing.activate()
+            NSApp.terminate(nil)
+            return
+        }
+        // A bare `swift build` binary has no bundle identifier, so the check
+        // above can't see it — and that is precisely the copy most likely to be
+        // stacked on top of the installed one during development. A file lock
+        // catches every case, however the process was launched.
+        guard Self.claimSingleInstanceLock() else {
+            Log.calendar.info("another Mind already holds the instance lock; exiting")
+            NSApp.terminate(nil)
+            return
+        }
+
         buildMainMenu()
         state.start()
 
@@ -44,6 +70,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureStatusItem()
         watchPreferences()
         showPreferencesOnFirstLaunch()
+    }
+
+    /// Held for the lifetime of the process; released when it exits, including
+    /// on a crash, because the kernel drops the flock with the descriptor.
+    private static var instanceLockDescriptor: Int32 = -1
+
+    private static func claimSingleInstanceLock() -> Bool {
+        let environment = ProcessInfo.processInfo.environment
+        for hook in ["MIND_SHOTS", "MIND_WATCH", "MIND_DIAGNOSE"] where environment[hook] != nil {
+            return true
+        }
+        let path = (NSTemporaryDirectory() as NSString).appendingPathComponent("com.joedesigns.mind.instance.lock")
+        let descriptor = open(path, O_CREAT | O_RDWR, 0o644)
+        guard descriptor >= 0 else { return true }  // can't lock: don't block the user
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            close(descriptor)
+            return false
+        }
+        instanceLockDescriptor = descriptor
+        return true
+    }
+
+    /// The diagnostic hooks deliberately launch extra copies with `open -n`,
+    /// so they opt out of the single-instance rule.
+    private func otherRunningInstance() -> NSRunningApplication? {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["MIND_SHOTS"] == nil,
+              environment["MIND_WATCH"] == nil,
+              environment["MIND_DIAGNOSE"] == nil,
+              let identifier = Bundle.main.bundleIdentifier else { return nil }
+        let me = ProcessInfo.processInfo.processIdentifier
+        return NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
+            .first { $0.processIdentifier != me }
     }
 
     /// The very first time Mind runs, open Preferences: choosing which
@@ -155,6 +214,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem?.button else { return }
         guard prefs.menuBarShowsCountdown else {
             button.title = ""
+            return
+        }
+        guard state.isDemo || state.calendar.access.isUsable else {
+            button.title = " ⚠︎"
+            button.toolTip = "Mind can't read your calendar — open Preferences → Calendars"
             return
         }
         let title = Copy.menuBarTitle(urgency: state.urgency, event: state.headline)

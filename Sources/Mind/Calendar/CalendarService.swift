@@ -23,6 +23,11 @@ final class CalendarService {
         case granted
         case denied
         case restricted
+        /// Calendar access is structurally impossible for this build — no app
+        /// bundle, or no usage description. Asking would be pointless.
+        case unavailable(String)
+
+        var isUsable: Bool { self == .granted }
     }
 
     private(set) var access: Access = .unknown
@@ -43,7 +48,24 @@ final class CalendarService {
 
     // MARK: Authorization
 
+    /// macOS will not grant calendar access to a bare executable: it needs a
+    /// bundle identifier to hang the permission on and a usage description to
+    /// show in the prompt. Running `.build/.../Mind` directly instead of
+    /// `dist/Mind.app` therefore fails silently, which is worse than failing
+    /// loudly — hence this check.
+    static func environmentProblem() -> String? {
+        guard Bundle.main.bundleIdentifier != nil else {
+            return "Running as a bare binary instead of an app bundle. macOS only grants calendar access to a bundled, signed app — use ./build.sh --run and launch dist/Mind.app."
+        }
+        let keys = ["NSCalendarsFullAccessUsageDescription", "NSCalendarsUsageDescription"]
+        guard keys.contains(where: { Bundle.main.object(forInfoDictionaryKey: $0) != nil }) else {
+            return "This build's Info.plist has no calendar usage description, so macOS will never prompt for access."
+        }
+        return nil
+    }
+
     private static func currentAccess() -> Access {
+        if let problem = environmentProblem() { return .unavailable(problem) }
         switch EKEventStore.authorizationStatus(for: .event) {
         case .fullAccess: return .granted
         case .denied: return .denied
@@ -57,10 +79,15 @@ final class CalendarService {
     /// Prompts for access if we've never asked. Safe to call repeatedly.
     func requestAccessIfNeeded() async {
         access = Self.currentAccess()
+        if case .unavailable(let problem) = access {
+            Log.calendar.error("calendar access impossible: \(problem, privacy: .public)")
+            return
+        }
         guard access == .unknown else {
             if access == .granted { refresh() }
             return
         }
+        Log.calendar.info("requesting calendar access")
         do {
             let granted = try await store.requestFullAccessToEvents()
             access = granted ? .granted : .denied
@@ -108,6 +135,16 @@ final class CalendarService {
             calendars = []
             return
         }
+
+        // Reset before every read, not just when we're told something changed.
+        //
+        // A long-lived EKEventStore hands back a cached snapshot, and the
+        // change notification is not reliable enough to be the only thing that
+        // clears it: if it doesn't arrive, the store happily serves the same
+        // stale events forever, which looks exactly like "the app only notices
+        // new events when you restart it". reset() just drops cached objects,
+        // so the cost is re-reading a local database we were reading anyway.
+        store.reset()
 
         let eventCalendars = store.calendars(for: .event)
         calendars = eventCalendars

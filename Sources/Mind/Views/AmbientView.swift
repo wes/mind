@@ -85,7 +85,9 @@ struct AmbientView: View {
 
     @ViewBuilder
     private func content(layout: AmbientLayout, palette: Palette) -> some View {
-        if state.isDemo || state.calendar.access == .granted || state.calendar.access == .unknown {
+        // "Clear afternoon" is a lie if we can't read the calendar at all, and
+        // a lie is worse than an error: it looks exactly like a free day.
+        if state.isDemo || state.calendar.access.isUsable {
             AgendaOverlay(layout: layout, palette: palette)
         } else {
             PermissionView(layout: layout, palette: palette)
@@ -345,26 +347,50 @@ private struct PermissionView: View {
     let layout: AmbientLayout
     let palette: Palette
 
+    private var headline: String {
+        switch state.calendar.access {
+        case .unavailable: return "This build can't read calendars"
+        case .unknown: return "Waiting for calendar access"
+        default: return "Calendar access is off"
+        }
+    }
+
+    private var detail: String {
+        switch state.calendar.access {
+        case .unavailable(let problem): return problem
+        case .unknown: return "Approve the permission prompt and Mind will start watching."
+        default: return "Mind only ever reads your calendar. Turn it on in Privacy & Security."
+        }
+    }
+
+    private var canOpenSettings: Bool {
+        if case .unavailable = state.calendar.access { return false }
+        return true
+    }
+
     var body: some View {
         let ink = palette.ink(0.2)
         VStack(alignment: .leading, spacing: 6) {
-            Text("Calendar access needed")
+            Text(headline)
                 .font(.system(size: layout.titleSize * 0.85, weight: .semibold, design: .rounded))
                 .foregroundStyle(ink)
                 .lineLimit(2)
                 .minimumScaleFactor(0.7)
             if layout.showsDetail {
-                Text("Mind only ever reads your calendar.")
+                Text(detail)
                     .font(.system(size: layout.captionSize, weight: .medium, design: .rounded))
-                    .foregroundStyle(ink.opacity(0.7))
-                    .lineLimit(2)
+                    .foregroundStyle(ink.opacity(0.75))
+                    .lineLimit(4)
+                    .minimumScaleFactor(0.8)
             }
-            Button("Open Privacy Settings") {
-                AppActions.openCalendarPrivacySettings()
+            if canOpenSettings {
+                Button("Open Privacy Settings") {
+                    AppActions.openCalendarPrivacySettings()
+                }
+                .buttonStyle(.borderless)
+                .font(.system(size: layout.captionSize, weight: .semibold, design: .rounded))
+                .foregroundStyle(ink)
             }
-            .buttonStyle(.borderless)
-            .font(.system(size: layout.captionSize, weight: .semibold, design: .rounded))
-            .foregroundStyle(ink)
         }
         .padding(layout.padding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
