@@ -439,10 +439,14 @@ private struct ControlButton: View {
     }
 }
 
-/// Forces a full reload: drops EventKit's cache, syncs the accounts, re-reads.
-/// The spin is the receipt — without it there's no way to tell a click that
-/// found nothing new from a click that didn't register.
+/// Forces a full sync: new EventKit store, forced account pull, then waits for
+/// the result rather than reading the database it just asked to be updated.
+///
+/// It reports what happened, because "I pressed it and nothing visibly changed"
+/// is ambiguous between "already up to date" and "the button is broken", and
+/// that ambiguity cost a lot of time.
 private struct RefreshButton: View {
+    @Environment(AppState.self) private var state
     let tint: Color
 
     @State private var hovering = false
@@ -450,21 +454,47 @@ private struct RefreshButton: View {
 
     var body: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.7)) { turns += 1 }
+            withAnimation(.easeInOut(duration: 0.6)) { turns += 1 }
             AppActions.refresh()
         } label: {
-            Image(systemName: "arrow.clockwise")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(tint.opacity(hovering ? 0.95 : 0.6))
-                .rotationEffect(.degrees(turns * 360))
+            icon
                 .frame(width: 18, height: 18)
                 .background(
                     Circle().fill(.ultraThinMaterial.opacity(hovering ? 0.9 : 0.5))
                 )
         }
         .buttonStyle(.plain)
+        .disabled(state.isSyncing)
         .onHover { hovering = $0 }
-        .help("Refresh calendar now")
+        .help(helpText)
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        if state.isSyncing {
+            ProgressView()
+                .controlSize(.mini)
+                .scaleEffect(0.55)
+        } else if let changed = state.lastSyncFoundChanges {
+            Image(systemName: changed ? "checkmark" : "equal")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(tint.opacity(0.95))
+                .transition(.scale.combined(with: .opacity))
+        } else {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(tint.opacity(hovering ? 0.95 : 0.6))
+                .rotationEffect(.degrees(turns * 360))
+        }
+    }
+
+    private var helpText: String {
+        if state.isSyncing { return "Syncing your calendars…" }
+        switch state.lastSyncFoundChanges {
+        case true: return "Updated"
+        case false: return "Already up to date"
+        default: return "Sync calendars now"
+        }
     }
 }
 

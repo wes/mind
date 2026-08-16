@@ -15,6 +15,15 @@ final class AppState {
     private(set) var now: Date = Date()
     private(set) var urgency: Urgency = .clear
 
+    /// True while a full sync is in flight, so the refresh button can show
+    /// that it's actually doing something rather than just twitching.
+    private(set) var isSyncing = false
+    /// Result of the last manual sync, cleared shortly after it's shown.
+    private(set) var lastSyncFoundChanges: Bool?
+
+    private var lastFullSync = Date.distantPast
+    private var syncTask: Task<Void, Never>?
+
     private var clockTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
 
@@ -104,14 +113,27 @@ final class AppState {
         }
 
         refreshTask = Task { @MainActor [weak self] in
-            // Pull the accounts once at launch so we never start from a stale
-            // database, then settle into the adaptive cadence.
-            self?.calendar.pullRemoteSources(throttle: 0, force: true)
+            // Start from a synced state rather than whatever was cached.
+            await self?.calendar.fullSync(timeout: 8)
+            self?.lastFullSync = Date()
+            self?.tick()
+
             while !Task.isCancelled {
                 guard let self else { return }
                 try? await Task.sleep(for: .seconds(self.cadence.poll))
                 guard !Task.isCancelled else { return }
-                self.calendar.pullRemoteSources(throttle: self.cadence.remote)
+
+                // Never go more than a minute without a genuine full sync:
+                // fresh store, forced account pull. The lighter polls in
+                // between are just re-reads of the local database.
+                if Date().timeIntervalSince(self.lastFullSync) >= Self.fullSyncInterval {
+                    self.lastFullSync = Date()
+                    self.calendar.rebuildStore()
+                    self.calendar.pullRemoteSources(throttle: 0, force: true)
+                } else {
+                    self.calendar.pullRemoteSources(throttle: self.cadence.remote)
+                }
+
                 self.calendar.refresh()
                 self.tick()
                 self.logHeartbeat()
@@ -148,6 +170,7 @@ final class AppState {
     func stop() {
         clockTask?.cancel()
         refreshTask?.cancel()
+        syncTask?.cancel()
     }
 
     func tick() {
@@ -162,15 +185,29 @@ final class AppState {
         tick()
     }
 
-    /// Everything the user can do that should produce an instant answer:
-    /// "Refresh Now", waking the machine, coming back to the app. Skips every
-    /// throttle and goes all the way out to the accounts.
+    /// At most a minute between genuine account syncs, whatever else is going on.
+    static let fullSyncInterval: TimeInterval = 60
+
+    /// Everything the user can do that should produce an answer: the refresh
+    /// button, "Refresh Now", waking the machine, coming back to the app.
+    /// Skips every throttle and waits for the sync to actually land.
     func refreshNow(reason: String) {
         Log.calendar.info("forced refresh: \(reason, privacy: .public)")
-        calendar.invalidateCache()
-        calendar.pullRemoteSources(throttle: 0, force: true)
-        calendar.refresh()
-        tick()
+        syncTask?.cancel()
+        syncTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.isSyncing = true
+            self.lastSyncFoundChanges = nil
+            let changed = await self.calendar.fullSync()
+            self.lastFullSync = Date()
+            self.isSyncing = false
+            self.lastSyncFoundChanges = changed
+            self.tick()
+
+            // Let the result show briefly, then go back to being quiet.
+            try? await Task.sleep(for: .seconds(2))
+            if !Task.isCancelled { self.lastSyncFoundChanges = nil }
+        }
     }
 
     private func observeSystemEvents() {

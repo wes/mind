@@ -38,7 +38,11 @@ final class CalendarService {
     private(set) var lastRemotePull: Date?
     private(set) var lastError: String?
 
-    private let store = EKEventStore()
+    /// Recreated on a full sync. A long-lived store can keep serving stale
+    /// data even after reset(), and a brand new one appears to be the only
+    /// thing that reliably shakes an account loose — which is why "it only
+    /// updates when I rebuild" was such an accurate description of the bug.
+    private var store = EKEventStore()
     private let prefs: Preferences
 
     init(prefs: Preferences = .shared) {
@@ -126,6 +130,52 @@ final class CalendarService {
     /// Called when we've been told something changed underneath us.
     func invalidateCache() {
         store.reset()
+    }
+
+    /// Throws the whole store away and starts again.
+    func rebuildStore() {
+        store = EKEventStore()
+    }
+
+    /// A full sync, and the important part: it *waits*.
+    ///
+    /// `refreshSourcesIfNecessary()` returns immediately and syncs in the
+    /// background, so reading straight afterwards gives you exactly the stale
+    /// data you were trying to get rid of. This kicks off the sync and then
+    /// keeps re-reading — through a fresh store each time — until the agenda
+    /// changes or we run out of patience.
+    ///
+    /// Returns true if anything actually changed.
+    @discardableResult
+    func fullSync(timeout: TimeInterval = 15) async -> Bool {
+        guard access == .granted else { return false }
+        let before = events
+        Log.calendar.info("full sync: starting")
+
+        rebuildStore()
+        lastRemotePull = Date()
+        store.refreshSourcesIfNecessary()
+        refresh()
+        if events != before {
+            Log.calendar.info("full sync: changed immediately")
+            return true
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        var attempts = 0
+        while Date() < deadline, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(900))
+            attempts += 1
+            rebuildStore()
+            store.refreshSourcesIfNecessary()
+            refresh()
+            if events != before {
+                Log.calendar.info("full sync: changed after \(attempts, privacy: .public) attempts")
+                return true
+            }
+        }
+        Log.calendar.info("full sync: no changes after \(attempts, privacy: .public) attempts")
+        return false
     }
 
     func refresh() {
