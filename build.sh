@@ -67,8 +67,31 @@ else
 	echo "    (icon generation failed; shipping without one)"
 fi
 
-echo "==> Signing (ad-hoc)"
-codesign --force --sign - --identifier "$BUNDLE_ID" "$APP"
+# An ad-hoc signature has no stable identity: every rebuild looks like a new
+# app to macOS, which revokes calendar access and re-prompts. Any real signing
+# identity avoids that, so prefer one when the machine has it.
+#
+# Override with MIND_SIGN_IDENTITY="Some Identity", or "-" to force ad-hoc.
+if [[ -n "${MIND_SIGN_IDENTITY:-}" ]]; then
+	IDENTITY="$MIND_SIGN_IDENTITY"
+elif security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application"; then
+	IDENTITY="$(security find-identity -v -p codesigning | grep -m1 "Developer ID Application" | sed -E 's/.*"(.*)"/\1/')"
+elif security find-identity -v -p codesigning 2>/dev/null | grep -q "Mind Dev"; then
+	IDENTITY="Mind Dev"
+else
+	IDENTITY="-"
+fi
+
+if [[ "$IDENTITY" == "-" ]]; then
+	echo "==> Signing (ad-hoc — calendar access will be revoked on each rebuild)"
+	echo "    Run ./scripts/make-dev-cert.sh once to stop that happening."
+	codesign --force --sign - --identifier "$BUNDLE_ID" "$APP"
+else
+	echo "==> Signing as: $IDENTITY"
+	# Hardened runtime so the same command works for notarised distribution.
+	codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" \
+		--options runtime --timestamp "$APP"
+fi
 codesign --verify --deep --strict "$APP" && echo "    signature ok"
 
 if [[ $INSTALL -eq 1 ]]; then

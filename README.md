@@ -26,11 +26,28 @@ deletes anything.
 Requires Xcode 16 or newer and macOS 14+. The first launch asks for calendar
 access and opens Preferences so you can pick which calendars to watch.
 
-The bundle is **ad-hoc signed**, which is enough for macOS to grant it calendar
-access. One consequence: an ad-hoc signature is a new identity every time you
-rebuild, so macOS may ask for calendar permission again after a rebuild. That's
-expected. (`Open at login` may also refuse for the same reason until the app is
-signed with a real Developer ID and living in `/Applications`.)
+### Signing
+
+`build.sh` signs with the best identity it can find: a Developer ID if the
+machine has one, otherwise a `Mind Dev` certificate, otherwise ad-hoc. Override
+with `MIND_SIGN_IDENTITY="..."`, or `"-"` to force ad-hoc.
+
+This matters more than it looks. **An ad-hoc signature has no stable identity**,
+so every rebuild is a brand-new app as far as macOS is concerned — which revokes
+calendar access and re-prompts. Miss that prompt and the app silently sees an
+empty calendar and shows you a convincing "Clear afternoon". Signing with any
+real certificate keys the permission to the identity instead of the binary, so
+the grant survives rebuilds.
+
+No Developer ID? Run this once:
+
+```sh
+./scripts/make-dev-cert.sh
+```
+
+It creates a self-signed code-signing certificate in your login keychain, used
+only on this machine. macOS asks for calendar access once more after the
+identity changes, and then stops asking.
 
 ## Releases
 
