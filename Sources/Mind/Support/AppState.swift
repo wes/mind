@@ -22,6 +22,7 @@ final class AppState {
     private(set) var lastSyncFoundChanges: Bool?
 
     private var lastFullSync = Date.distantPast
+    private var lastAccessRequest = Date.distantPast
     private var syncTask: Task<Void, Never>?
 
     private var clockTask: Task<Void, Never>?
@@ -101,6 +102,7 @@ final class AppState {
         // Demo mode never touches EventKit, so it never triggers a permission
         // prompt — you can show the app off on a machine that's never seen it.
         if !isDemo {
+            lastAccessRequest = Date()
             Task { await calendar.requestAccessIfNeeded() }
         }
         observeSystemEvents()
@@ -122,6 +124,15 @@ final class AppState {
                 guard let self else { return }
                 try? await Task.sleep(for: .seconds(self.cadence.poll))
                 guard !Task.isCancelled else { return }
+
+                // A permission prompt that gets dismissed rather than answered
+                // leaves us waiting forever, so ask again periodically instead
+                // of only once at launch.
+                if self.calendar.access == .unknown,
+                   Date().timeIntervalSince(self.lastAccessRequest) > 60 {
+                    self.lastAccessRequest = Date()
+                    await self.calendar.requestAccessIfNeeded()
+                }
 
                 // Never go more than a minute without a genuine full sync:
                 // fresh store, forced account pull. The lighter polls in

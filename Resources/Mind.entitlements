@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Required under the hardened runtime. Without it macOS refuses to even
+	     show the calendar permission prompt: tccd logs "requires entitlement
+	     com.apple.security.personal-information.calendars but it is missing"
+	     and denies silently, which looks exactly like a broken app.
+
+	     Mind is not sandboxed, so this is the only entitlement it needs, and it
+	     grants the ability to ask — the user still has to say yes, and Mind
+	     only ever reads. -->
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+</dict>
+</plist>

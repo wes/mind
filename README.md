@@ -39,6 +39,28 @@ empty calendar and shows you a convincing "Clear afternoon". Signing with any
 real certificate keys the permission to the identity instead of the binary, so
 the grant survives rebuilds.
 
+Signing with a real identity turns on the **hardened runtime**, which brings a
+trap worth knowing about: under it, macOS requires
+`com.apple.security.personal-information.calendars` in the entitlements before
+it will even *display* the calendar permission prompt. Without the entitlement
+`tccd` logs
+
+```
+requires entitlement com.apple.security.personal-information.calendars but it is missing
+```
+
+and denies silently — no dialog, and toggling the app in System Settings does
+nothing. `Resources/Mind.entitlements` supplies it. Mind is not sandboxed, so
+that is the only entitlement it needs.
+
+If calendar access ever gets into a stuck state (a prompt answered "Don't
+Allow", or a permission recorded against an older signature), clear it and let
+the app ask again:
+
+```sh
+tccutil reset Calendar com.joedesigns.mind
+```
+
 No Developer ID? Run this once:
 
 ```sh

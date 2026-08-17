@@ -89,8 +89,11 @@ if [[ "$IDENTITY" == "-" ]]; then
 else
 	echo "==> Signing as: $IDENTITY"
 	# Hardened runtime so the same command works for notarised distribution.
+	# The entitlement is mandatory under the hardened runtime: without it macOS
+	# will not even display the calendar permission prompt.
 	codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" \
-		--options runtime --timestamp "$APP"
+		--options runtime --timestamp \
+		--entitlements Resources/Mind.entitlements "$APP"
 fi
 codesign --verify --deep --strict "$APP" && echo "    signature ok"
 
