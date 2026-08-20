@@ -240,6 +240,59 @@ final class CalendarService {
         lastRefresh = now
     }
 
+    /// Every event EventKit hands back for the horizon window — across *all*
+    /// calendars, not just the included ones — with the reason Mind did or
+    /// didn't keep it.
+    ///
+    /// The counts in the diagnostics can tell you the agenda is empty; only
+    /// this can tell you why, which is the question you actually have when an
+    /// event you can plainly see in Calendar.app isn't on screen.
+    func auditWindow() -> [String] {
+        guard access == .granted else { return ["access is \(access), nothing to audit"] }
+        store.reset()
+
+        let now = Date()
+        let start = now.addingTimeInterval(-6 * 3600)
+        let end = now.addingTimeInterval(max(prefs.horizonHours, 1) * 3600 + 3600)
+        let all = store.calendars(for: .event)
+        let predicate = store.predicateForEvents(withStart: start, end: end, calendars: all)
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE HH:mm"
+
+        return store.events(matching: predicate)
+            .sorted { $0.startDate < $1.startDate }
+            .map { event in
+                let title = event.title ?? "(untitled)"
+                let calendar = event.calendar?.title ?? "(no calendar)"
+                let when = "\(formatter.string(from: event.startDate))–\(formatter.string(from: event.endDate))"
+                return "    \(when)  \(title)  [\(calendar)]  → \(verdict(for: event, now: now))"
+            }
+    }
+
+    /// Why `refresh()` would or wouldn't show this event. Mirrors the order of
+    /// the calendar filter and `keep()`.
+    private func verdict(for event: EKEvent, now: Date) -> String {
+        if let id = event.calendar?.calendarIdentifier, !prefs.isCalendarEnabled(id) {
+            return "DROPPED: calendar switched off"
+        }
+        if event.status == .canceled { return "DROPPED: cancelled" }
+        if event.isAllDay && !prefs.includeAllDay { return "DROPPED: all-day, and all-day events are off" }
+        if event.endDate <= now { return "DROPPED: already ended" }
+        if prefs.ignoreDeclined, let attendees = event.attendees {
+            for attendee in attendees where attendee.isCurrentUser {
+                if attendee.participantStatus == .declined { return "DROPPED: you declined it" }
+            }
+        }
+        if !event.isAllDay, prefs.minimumDurationMinutes > 0 {
+            let minutes = event.endDate.timeIntervalSince(event.startDate) / 60
+            if minutes < prefs.minimumDurationMinutes {
+                return "DROPPED: \(Int(minutes))m is under the \(Int(prefs.minimumDurationMinutes))m minimum"
+            }
+        }
+        return "kept"
+    }
+
     private func keep(_ event: EKEvent, now: Date) -> Bool {
         if event.status == .canceled { return false }
         if event.isAllDay && !prefs.includeAllDay { return false }

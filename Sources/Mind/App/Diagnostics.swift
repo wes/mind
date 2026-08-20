@@ -49,6 +49,11 @@ enum Diagnostics {
             print("    \(formatter.string(from: event.start))  \(event.title)  [\(event.calendarTitle)]")
         }
 
+        // The counts above say the agenda is empty; this says why.
+        let audit = state.calendar.auditWindow()
+        print("  everything EventKit returned for the window (\(audit.count)):")
+        for line in audit { print(line) }
+
         let urgency = state.urgency
         print("  headline: \(state.headline?.title ?? "none")")
         print("  phase: \(urgency.phase), intensity: \(String(format: "%.2f", urgency.intensity))")
