@@ -54,6 +54,10 @@ enum Diagnostics {
         print("  everything EventKit returned for the window (\(audit.count)):")
         for line in audit { print(line) }
 
+        let accounts = state.calendar.auditAccounts()
+        print("  events per calendar over ±7 days:")
+        for line in accounts { print(line) }
+
         let urgency = state.urgency
         print("  headline: \(state.headline?.title ?? "none")")
         print("  phase: \(urgency.phase), intensity: \(String(format: "%.2f", urgency.intensity))")

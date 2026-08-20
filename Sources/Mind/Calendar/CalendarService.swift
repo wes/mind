@@ -293,6 +293,41 @@ final class CalendarService {
         return "kept"
     }
 
+    /// Event counts per calendar over a wide window, which answers a different
+    /// question from `auditWindow()`: not "why was this event dropped" but
+    /// "is this account syncing at all".
+    ///
+    /// A calendar that is present in the list yet returns nothing over a whole
+    /// fortnight is almost never an empty calendar — it is an account whose
+    /// events haven't landed in the local database, which is invisible from
+    /// the horizon window alone.
+    func auditAccounts(days: Double = 7) -> [String] {
+        guard access == .granted else { return ["access is \(access), nothing to audit"] }
+        store.reset()
+
+        let now = Date()
+        let predicate = store.predicateForEvents(
+            withStart: now.addingTimeInterval(-days * 86_400),
+            end: now.addingTimeInterval(days * 86_400),
+            calendars: store.calendars(for: .event)
+        )
+
+        var counts: [String: Int] = [:]
+        for event in store.events(matching: predicate) {
+            let key = "\(event.calendar?.source?.title ?? "?") / \(event.calendar?.title ?? "?")"
+            counts[key, default: 0] += 1
+        }
+
+        return store.calendars(for: .event)
+            .map { calendar in
+                let key = "\(calendar.source?.title ?? "?") / \(calendar.title)"
+                let count = counts[key] ?? 0
+                let flag = count == 0 ? "  <- nothing in ±\(Int(days))d" : ""
+                return "    \(count) events  \(key)\(flag)"
+            }
+            .sorted()
+    }
+
     private func keep(_ event: EKEvent, now: Date) -> Bool {
         if event.status == .canceled { return false }
         if event.isAllDay && !prefs.includeAllDay { return false }

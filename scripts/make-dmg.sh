@@ -31,19 +31,36 @@ mkdir -p "$STAGING"
 cp -R "$APP" "$STAGING/Mind.app"
 ln -s /Applications "$STAGING/Applications"
 
-# A short read-me in the image itself, since an ad-hoc signed app gets the
-# "unidentified developer" treatment on first open.
-cat > "$STAGING/Read Me.txt" <<'TXT'
+# A short read-me in the image itself. What the first launch feels like
+# depends entirely on how the app was signed, so ask the bundle rather than
+# guessing: a Developer ID build is merely un-notarised, while an ad-hoc one
+# (what CI produces, having no identity) has no identity at all.
+if codesign -dv "$APP" 2>&1 | grep -q "^TeamIdentifier=[A-Z0-9]"; then
+	FIRST_LAUNCH='2. macOS will refuse the first launch because this build is signed but not
+   notarised. Open System Settings -> Privacy & Security, scroll to the note
+   about Mind, and click "Open Anyway". You only have to do this once.'
+else
+	FIRST_LAUNCH='2. This build is ad-hoc signed, so macOS will refuse to launch it and will
+   re-ask for calendar access after every update. Open System Settings ->
+   Privacy & Security and click "Open Anyway" to get past the first launch.'
+fi
+
+cat > "$STAGING/Read Me.txt" <<TXT
 Mind
 
 1. Drag Mind.app onto the Applications folder.
-2. The first launch will be blocked because this build is ad-hoc signed rather
-   than notarised. Right-click Mind.app -> Open, then confirm. You only have to
-   do this once.
+$FIRST_LAUNCH
 3. Mind will ask for calendar access. It only ever reads your calendar.
 
 Mind lives in the menu bar and in a small floating panel. Drag the panel to move
 it, drag its bottom-right grip to resize, right-click it for options.
+
+If the panel says nothing is coming up and you disagree, run:
+
+  open -n --env MIND_DIAGNOSE=/tmp/mind.txt /Applications/Mind.app
+  cat /tmp/mind.txt
+
+It prints every event in the window and why each one was kept or dropped.
 TXT
 
 echo "==> Building $DMG"
