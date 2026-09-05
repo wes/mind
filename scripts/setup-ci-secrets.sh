@@ -22,9 +22,9 @@ SECTION="all"
 case "${1:-}" in
 	--cert|--notary) SECTION="${1#--}"; shift ;;
 	# Print the comment block above, stopping at the first line that is not a
-	# comment, so this stays correct as the header grows.
-	# `\?` is a GNU extension that BSD sed ignores without complaint, hence
-	# two plain substitutions rather than one clever one.
+	# comment, so this stays correct as the header grows. Two plain
+	# substitutions rather than one `s/^# \?//`, because that quantifier is a
+	# GNU extension which BSD sed ignores without complaint.
 	-h|--help) sed -n '2,${/^#/!q; s/^#//; s/^ //; p;}' "$0"; exit 0 ;;
 esac
 REPO="${1:-wes/mind}"
