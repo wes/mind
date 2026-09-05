@@ -31,11 +31,15 @@ mkdir -p "$STAGING"
 cp -R "$APP" "$STAGING/Mind.app"
 ln -s /Applications "$STAGING/Applications"
 
-# A short read-me in the image itself. What the first launch feels like
-# depends entirely on how the app was signed, so ask the bundle rather than
-# guessing: a Developer ID build is merely un-notarised, while an ad-hoc one
-# (what CI produces, having no identity) has no identity at all.
-if codesign -dv "$APP" 2>&1 | grep -q "^TeamIdentifier=[A-Z0-9]"; then
+# A short read-me in the image itself. What the first launch feels like depends
+# entirely on how the app was signed, so ask the bundle rather than guessing.
+# The three cases are genuinely different for whoever opens this: a notarised
+# build just launches, a Developer ID build needs one trip to System Settings,
+# and an ad-hoc build needs that trip after every single update.
+if xcrun stapler validate "$APP" >/dev/null 2>&1; then
+	FIRST_LAUNCH='2. Double-click Mind. It is signed and notarised by Apple, so it opens
+   straight away with no warnings to click through.'
+elif codesign -dv "$APP" 2>&1 | grep -q "^TeamIdentifier=[A-Z0-9]"; then
 	FIRST_LAUNCH='2. macOS will refuse the first launch because this build is signed but not
    notarised. Open System Settings -> Privacy & Security, scroll to the note
    about Mind, and click "Open Anyway". You only have to do this once.'

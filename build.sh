@@ -7,6 +7,7 @@
 #   ./build.sh --run           launch it when the build finishes
 #   ./build.sh --install       also copy into /Applications
 #   ./build.sh --version 1.2.0 stamp a version into the bundle
+#   ./build.sh --require-signing  fail rather than fall back to ad-hoc
 #
 # The bundle is ad-hoc signed so macOS will grant it calendar access. Note that
 # an ad-hoc signature changes identity on every rebuild, so macOS may ask for
@@ -20,6 +21,7 @@ ARCH_FLAGS=()
 RUN=0
 INSTALL=0
 VERSION=""
+REQUIRE_SIGNING=0
 BUNDLE_ID="com.joedesigns.mind"
 
 while [[ $# -gt 0 ]]; do
@@ -29,7 +31,8 @@ while [[ $# -gt 0 ]]; do
 		--run) RUN=1 ;;
 		--install) INSTALL=1 ;;
 		--version) VERSION="${2:-}"; shift ;;
-		-h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+		--require-signing) REQUIRE_SIGNING=1 ;;
+		-h|--help) sed -n '2,16p' "$0"; exit 0 ;;
 		*) echo "unknown option: $1" >&2; exit 1 ;;
 	esac
 	shift
@@ -37,6 +40,38 @@ done
 
 APP="dist/Mind.app"
 CONTENTS="$APP/Contents"
+
+# An ad-hoc signature has no stable identity: every rebuild looks like a new
+# app to macOS, which revokes calendar access and re-prompts. Any real signing
+# identity avoids that, so prefer one when the machine has it.
+#
+# Override with MIND_SIGN_IDENTITY="Some Identity", or "-" to force ad-hoc.
+if [[ -n "${MIND_SIGN_IDENTITY:-}" ]]; then
+	IDENTITY="$MIND_SIGN_IDENTITY"
+elif security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application"; then
+	IDENTITY="$(security find-identity -v -p codesigning | grep -m1 "Developer ID Application" | sed -E 's/.*"(.*)"/\1/')"
+elif security find-identity -v -p codesigning 2>/dev/null | grep -q "Mind Dev"; then
+	IDENTITY="Mind Dev"
+else
+	IDENTITY="-"
+fi
+
+# A release must be signed with a Developer ID and nothing else. Ad-hoc cannot
+# be notarized at all, and the self-signed "Mind Dev" certificate is trusted
+# only on the machine that made it — either one would publish a DMG that nobody
+# else can open. Failing here, where the cause is obvious, beats finding out
+# from a stranger's bug report.
+if [[ $REQUIRE_SIGNING -eq 1 && "$IDENTITY" != *"Developer ID"* ]]; then
+	if [[ "$IDENTITY" == "-" ]]; then
+		FOUND="no signing identity at all"
+	else
+		FOUND="'$IDENTITY', which is not a Developer ID"
+	fi
+	echo "==> ERROR: --require-signing needs a Developer ID certificate; found $FOUND." >&2
+	echo "    Set MIND_SIGN_IDENTITY, or import a Developer ID certificate first." >&2
+	echo "    In CI that is scripts/ci-signing.sh; see docs/releasing.md." >&2
+	exit 1
+fi
 
 echo "==> Building ($CONFIGURATION)"
 swift build -c "$CONFIGURATION" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
@@ -65,21 +100,6 @@ if "$BIN_DIR/MindIconGen" "$ICONSET" >/dev/null; then
 	rm -rf "$ICONSET"
 else
 	echo "    (icon generation failed; shipping without one)"
-fi
-
-# An ad-hoc signature has no stable identity: every rebuild looks like a new
-# app to macOS, which revokes calendar access and re-prompts. Any real signing
-# identity avoids that, so prefer one when the machine has it.
-#
-# Override with MIND_SIGN_IDENTITY="Some Identity", or "-" to force ad-hoc.
-if [[ -n "${MIND_SIGN_IDENTITY:-}" ]]; then
-	IDENTITY="$MIND_SIGN_IDENTITY"
-elif security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application"; then
-	IDENTITY="$(security find-identity -v -p codesigning | grep -m1 "Developer ID Application" | sed -E 's/.*"(.*)"/\1/')"
-elif security find-identity -v -p codesigning 2>/dev/null | grep -q "Mind Dev"; then
-	IDENTITY="Mind Dev"
-else
-	IDENTITY="-"
 fi
 
 if [[ "$IDENTITY" == "-" ]]; then
