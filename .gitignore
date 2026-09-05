@@ -2,3 +2,12 @@
 dist/
 .DS_Store
 *.xcuserstate
+
+# Signing material. None of this belongs in a public repository, and a stray
+# `git add -A` is all it would take: the .p12 would let anyone sign software as
+# you, and the .p8 would let them notarize it.
+*.p12
+*.p8
+*.cer
+*.certSigningRequest
+AuthKey_*
