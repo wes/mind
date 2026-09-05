@@ -28,9 +28,26 @@ jobs:
 
       - name: Check the shell scripts parse
         run: |
+          # Check each script with the shell it declares. Not every script here
+          # is bash — setup-ci-secrets.sh is zsh, and `bash -n` rejects
+          # perfectly good zsh as a syntax error.
+          # Not named "status": that is read-only in zsh, so anyone who pastes
+          # this loop into a zsh prompt to debug it gets a confusing error.
+          failed=0
           for script in build.sh scripts/*.sh; do
-            bash -n "$script" && echo "ok  $script"
+            shell="$(head -1 "$script" | sed -n 's|^#!.*/||p')"
+            case "$shell" in
+              zsh) checker=zsh ;;
+              *)   checker=bash ;;
+            esac
+            if "$checker" -n "$script"; then
+              echo "ok    $script ($checker)"
+            else
+              echo "::error file=$script::$script is not valid $checker"
+              failed=1
+            fi
           done
+          exit $failed
 
       - name: Build the app bundle
         run: ./build.sh

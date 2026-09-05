@@ -12,14 +12,16 @@ name: Release
 # There is also a manual run in the Actions tab if you would rather type a
 # version than make a tag.
 #
-# Needs five repository secrets. docs/releasing.md says where each one comes
-# from and how to rotate it:
+# Needs four repository secrets, and a fifth only for a Team API key.
+# `./scripts/setup-ci-secrets.sh` sets them all up; docs/releasing.md explains
+# where each comes from and how to rotate it:
 #
 #   MACOS_CERTIFICATE_P12       Developer ID Application cert + key, base64 .p12
 #   MACOS_CERTIFICATE_PASSWORD  the password that .p12 was exported with
 #   APPLE_API_KEY_ID            App Store Connect key ID
-#   APPLE_API_ISSUER_ID         App Store Connect issuer UUID
 #   APPLE_API_KEY_P8            base64 of the AuthKey_*.p8
+#   APPLE_API_ISSUER_ID         issuer UUID — Team keys only. notarytool
+#                               rejects an Individual key that is given one.
 
 on:
   push:
@@ -128,17 +130,24 @@ jobs:
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
         run: |
+          # APPLE_API_ISSUER_ID is deliberately not required: only a Team API
+          # key has one, and notarytool refuses an Individual key that is
+          # handed an issuer.
           missing=()
           for name in MACOS_CERTIFICATE_P12 MACOS_CERTIFICATE_PASSWORD \
-                      APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_P8; do
+                      APPLE_API_KEY_ID APPLE_API_KEY_P8; do
             [[ -n "${!name}" ]] || missing+=("$name")
           done
           if (( ${#missing[@]} )); then
             echo "::error::Missing repository secrets: ${missing[*]}"
-            echo "See docs/releasing.md for how to create them."
+            echo "Run ./scripts/setup-ci-secrets.sh, or see docs/releasing.md."
             exit 1
           fi
-          echo "All five signing secrets are set."
+          if [[ -n "$APPLE_API_ISSUER_ID" ]]; then
+            echo "Signing secrets are set (Team API key)."
+          else
+            echo "Signing secrets are set (Individual API key, no issuer)."
+          fi
 
       - name: Work out what we are building
         id: plan

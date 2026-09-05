@@ -18,8 +18,10 @@
 #
 #   App Store Connect API key (what CI uses)
 #     APPLE_API_KEY_ID      the key's 10-character ID
-#     APPLE_API_ISSUER_ID   the issuer UUID from App Store Connect
 #     APPLE_API_KEY_P8      base64 of the .p8 file you downloaded
+#     APPLE_API_ISSUER_ID   the issuer UUID — required for a Team key, and it
+#                           must be left unset for an Individual key, which
+#                           notarytool rejects outright if given one
 #
 #   A stored keychain profile (convenient locally)
 #     MIND_NOTARY_PROFILE   defaults to "mind"; create it once with
@@ -43,17 +45,25 @@ chmod 700 "$WORK"
 CREDENTIALS=()
 if [[ -n "${APPLE_API_KEY_P8:-}" ]]; then
 	: "${APPLE_API_KEY_ID:?APPLE_API_KEY_P8 is set, so APPLE_API_KEY_ID must be too}"
-	: "${APPLE_API_ISSUER_ID:?APPLE_API_KEY_P8 is set, so APPLE_API_ISSUER_ID must be too}"
 	printf '%s' "$APPLE_API_KEY_P8" | base64 --decode > "$WORK/key.p8"
-	CREDENTIALS=(--key "$WORK/key.p8" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID")
-	echo "==> Notarizing with App Store Connect key $APPLE_API_KEY_ID"
+	CREDENTIALS=(--key "$WORK/key.p8" --key-id "$APPLE_API_KEY_ID")
+	# Only a Team key carries an issuer. Passing one for an Individual key is
+	# not merely redundant, notarytool refuses it, so an empty secret has to
+	# mean "omit the flag" rather than "pass an empty string".
+	if [[ -n "${APPLE_API_ISSUER_ID:-}" ]]; then
+		CREDENTIALS+=(--issuer "$APPLE_API_ISSUER_ID")
+		echo "==> Notarizing with App Store Connect team key $APPLE_API_KEY_ID"
+	else
+		echo "==> Notarizing with App Store Connect individual key $APPLE_API_KEY_ID"
+	fi
 else
 	PROFILE="${MIND_NOTARY_PROFILE:-mind}"
 	if ! xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
 		cat >&2 <<-MSG
 		No notarization credentials found.
 
-		For CI, set APPLE_API_KEY_ID, APPLE_API_ISSUER_ID and APPLE_API_KEY_P8.
+		For CI, set APPLE_API_KEY_ID and APPLE_API_KEY_P8 (plus
+		APPLE_API_ISSUER_ID if yours is a Team key).
 
 		Locally, store a profile once:
 
