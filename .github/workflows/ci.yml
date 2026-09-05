@@ -1,12 +1,17 @@
 name: Build
 
-# Catches breakage before you go to tag a release.
+# Catches breakage before it reaches main. Deliberately secret-free so that it
+# runs identically on a pull request from a fork: it builds an ad-hoc signed
+# bundle and checks it holds together. Signing and notarization happen in
+# release.yml, which only runs on this repository.
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -21,10 +26,21 @@ jobs:
           if [[ -n "$LATEST" ]]; then sudo xcode-select -switch "$LATEST"; fi
           swift --version
 
+      - name: Check the shell scripts parse
+        run: |
+          for script in build.sh scripts/*.sh; do
+            bash -n "$script" && echo "ok  $script"
+          done
+
       - name: Build the app bundle
         run: ./build.sh
 
       - name: Verify the bundle
         run: |
-          codesign --verify --deep --strict dist/Mind.app
-          test -f dist/Mind.app/Contents/Resources/AppIcon.icns
+          APP=dist/Mind.app
+          test -x "$APP/Contents/MacOS/Mind"
+          test -f "$APP/Contents/Resources/AppIcon.icns"
+          codesign --verify --deep --strict "$APP"
+
+      - name: Verify the disk image builds
+        run: ./scripts/make-dmg.sh 0.0.0-ci

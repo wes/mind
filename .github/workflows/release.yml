@@ -1,61 +1,178 @@
 name: Release
 
-# Tag a release to publish a DMG:
+# One workflow, two outcomes, so "does it still build, sign and notarize?" is
+# answered continuously rather than the first time you try to ship.
 #
-#   git tag v1.0.1 && git push origin v1.0.1
+#   push to main   -> a signed, notarized DMG published as the rolling
+#                     "nightly" pre-release, replaced every time main moves
+#   push a v* tag  -> the same DMG, published as a permanent release
 #
-# Or run this workflow by hand from the Actions tab with a version number. The
-# DMG lands in the public Tigris bucket at:
+#     git tag v1.2.0 && git push origin v1.2.0
 #
-#   https://mind-releases.t3.storage.dev/Mind-<version>.dmg
-#   https://mind-releases.t3.storage.dev/Mind-latest.dmg
+# There is also a manual run in the Actions tab if you would rather type a
+# version than make a tag.
+#
+# Needs five repository secrets. docs/releasing.md says where each one comes
+# from and how to rotate it:
+#
+#   MACOS_CERTIFICATE_P12       Developer ID Application cert + key, base64 .p12
+#   MACOS_CERTIFICATE_PASSWORD  the password that .p12 was exported with
+#   APPLE_API_KEY_ID            App Store Connect key ID
+#   APPLE_API_ISSUER_ID         App Store Connect issuer UUID
+#   APPLE_API_KEY_P8            base64 of the AuthKey_*.p8
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to build (e.g. 1.0.1)"
+        description: "Version to release (e.g. 1.2.0)"
         required: true
         type: string
 
 concurrency:
+  # Never cancel a run in flight: a cancelled job can leave a notarization
+  # submitted but unstapled, and a half-replaced rolling release behind it.
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  TIGRIS_BUCKET: mind-releases
-  TIGRIS_ENDPOINT: https://t3.storage.dev
-  AWS_REGION: auto
-  # Tigris does not implement the trailing checksum headers the newer AWS CLI
-  # sends by default, so keep the CLI on the classic signing behaviour.
-  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
-  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+permissions:
+  contents: write
 
 jobs:
+  # Editing the README should not cost ten minutes of macOS runner time and two
+  # notarization submissions. This cannot be a `paths-ignore` on the trigger
+  # above, because that filter would apply to tag pushes too and could silently
+  # skip a real release whose commit happened to touch only docs.
+  decide:
+    runs-on: ubuntu-latest
+    if: github.repository == 'wes/mind'
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Is there anything worth building?
+        id: check
+        env:
+          # Only whether it exists is used, never the value.
+          HAVE_SECRETS: ${{ secrets.MACOS_CERTIFICATE_P12 != '' && secrets.APPLE_API_KEY_P8 != '' }}
+        run: |
+          set -euo pipefail
+
+          DELIBERATE=false
+          if [[ "$GITHUB_EVENT_NAME" != "push" || "$GITHUB_REF_TYPE" == "tag" ]]; then
+            DELIBERATE=true
+          fi
+
+          # Before the signing secrets are configured there is nothing useful a
+          # main build can do, and failing every push of a fresh clone with a
+          # red X teaches people to ignore red Xs. A tag is someone deliberately
+          # trying to ship, so that still runs and fails loudly with the exact
+          # list of what is missing.
+          if [[ "$HAVE_SECRETS" != "true" && "$DELIBERATE" != "true" ]]; then
+            echo "::warning::Signing secrets are not configured, so main is not being notarized. See docs/releasing.md."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Tags and manual runs always build, whatever they touched.
+          if [[ "$DELIBERATE" == "true" ]]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BEFORE="${{ github.event.before }}"
+          # A new branch, a force push, or a rewritten history leaves us with
+          # nothing to compare against. Build rather than guess.
+          if [[ -z "$BEFORE" || "$BEFORE" =~ ^0+$ ]] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CHANGED="$(git diff --name-only "$BEFORE" "$GITHUB_SHA")"
+          echo "Changed files:"
+          echo "$CHANGED" | sed 's/^/  /'
+
+          # Asking what changed that *isn't* documentation, rather than testing a
+          # `grep -qv` exit code, which is easy to misread and which some grep
+          # implementations get wrong when -q and -v are combined.
+          CODE="$(echo "$CHANGED" | grep -vE '(\.md$|^docs/|^LICENSE$|^\.github/ISSUE_TEMPLATE/|^\.github/pull_request_template\.md$)' || true)"
+          if [[ -n "$CODE" ]]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Documentation only — skipping the notarized build."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
+    needs: decide
+    if: needs.decide.outputs.build == 'true'
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # release notes are generated from history
 
-      - name: Resolve version
-        id: version
+      - name: Check the signing secrets are present
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            VERSION="${{ inputs.version }}"
-          else
-            VERSION="${GITHUB_REF_NAME#v}"
-          fi
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
-            echo "::error::'$VERSION' is not a version number like 1.0.1"
+          missing=()
+          for name in MACOS_CERTIFICATE_P12 MACOS_CERTIFICATE_PASSWORD \
+                      APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_P8; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} )); then
+            echo "::error::Missing repository secrets: ${missing[*]}"
+            echo "See docs/releasing.md for how to create them."
             exit 1
           fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Building Mind $VERSION"
+          echo "All five signing secrets are set."
+
+      - name: Work out what we are building
+        id: plan
+        run: |
+          set -euo pipefail
+          BASE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            CHANNEL="release"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+            CHANNEL="release"
+          else
+            # A main build is not a version, it is a snapshot on the way to one,
+            # so name it after the release it is heading towards.
+            VERSION="$BASE-main.${GITHUB_RUN_NUMBER}"
+            CHANNEL="nightly"
+          fi
+
+          if [[ "$CHANNEL" == "release" && ! "$VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::'$VERSION' is not a version number like 1.2.0"
+            exit 1
+          fi
+
+          if [[ "$CHANNEL" == "release" && "$VERSION" != "$BASE" ]]; then
+            echo "::warning::Building $VERSION but Resources/Info.plist says $BASE. Bump the plist to match."
+          fi
+
+          {
+            echo "version=$VERSION"
+            echo "channel=$CHANNEL"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building Mind $VERSION ($CHANNEL)"
 
       - name: Select the newest installed Xcode
         run: |
@@ -64,78 +181,123 @@ jobs:
           xcodebuild -version
           swift --version
 
-      - name: Build universal app
-        run: ./build.sh --universal --version "${{ steps.version.outputs.version }}"
+      - name: Load the Developer ID certificate
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: ./scripts/ci-signing.sh
 
-      - name: Verify the bundle
+      - name: Build the universal app
+        run: ./build.sh --universal --require-signing --version "${{ steps.plan.outputs.version }}"
+
+      - name: Verify the signature before sending it to Apple
         run: |
+          set -euo pipefail
           APP=dist/Mind.app
           test -x "$APP/Contents/MacOS/Mind"
           test -f "$APP/Contents/Resources/AppIcon.icns"
-          codesign --verify --deep --strict "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+          # Both architectures, or half the people who download this get
+          # something that cannot run at all.
           echo "Architectures: $(lipo -archs "$APP/Contents/MacOS/Mind")"
           lipo -archs "$APP/Contents/MacOS/Mind" | grep -q arm64
           lipo -archs "$APP/Contents/MacOS/Mind" | grep -q x86_64
 
-      - name: Package DMG
-        id: dmg
-        run: ./scripts/make-dmg.sh "${{ steps.version.outputs.version }}"
+          # Apple rejects anything without the hardened runtime, and under the
+          # hardened runtime macOS will not show the calendar prompt without
+          # this entitlement. Both failures are far cheaper to catch here.
+          codesign -d --verbose=2 "$APP" 2>&1 | grep -q "flags=.*runtime" \
+            || { echo "::error::Hardened runtime is not enabled"; exit 1; }
+          codesign -d --entitlements - --xml "$APP" 2>/dev/null \
+            | grep -q "com.apple.security.personal-information.calendars" \
+            || { echo "::error::Calendar entitlement is missing"; exit 1; }
 
-      - name: Upload to Tigris
+      - name: Notarize the app
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: ./scripts/notarize.sh dist/Mind.app
+
+      - name: Package the disk image
+        id: dmg
+        run: ./scripts/make-dmg.sh "${{ steps.plan.outputs.version }}"
+
+      - name: Notarize the disk image
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: ./scripts/notarize.sh "${{ steps.dmg.outputs.dmg }}"
+
+      - name: Checksum
+        id: sums
         run: |
           set -euo pipefail
-          command -v aws >/dev/null || brew install awscli
+          # Stapling rewrote the image, so the hash make-dmg.sh printed earlier
+          # is not the hash of the file anyone will download.
+          DMG="${{ steps.dmg.outputs.dmg }}"
+          ( cd "$(dirname "$DMG")" && shasum -a 256 "$(basename "$DMG")" ) > "$DMG.sha256"
+          SHA="$(cut -d' ' -f1 "$DMG.sha256")"
+          SIZE="$(du -h "$DMG" | cut -f1 | tr -d ' ')"
+          {
+            echo "sha256=$SHA"
+            echo "size=$SIZE"
+          } >> "$GITHUB_OUTPUT"
+          cat "$DMG.sha256"
 
-          VERSION="${{ steps.version.outputs.version }}"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.plan.outputs.version }}"
+          CHANNEL="${{ steps.plan.outputs.channel }}"
           DMG="${{ steps.dmg.outputs.dmg }}"
 
-          upload() {
-            aws s3 cp "$1" "s3://$TIGRIS_BUCKET/$2" \
-              --endpoint-url "$TIGRIS_ENDPOINT" \
-              --content-type "$3" \
-              --cache-control "$4"
-          }
+          ./scripts/release-notes.sh "$CHANNEL" "$VERSION" \
+            "$(basename "$DMG")" "${{ steps.sums.outputs.sha256 }}" > notes.md
 
-          # The versioned copy is immutable, so it can be cached hard. The
-          # "latest" alias changes every release, so it must not be.
-          upload "$DMG" "Mind-$VERSION.dmg" application/x-apple-diskimage "public, max-age=31536000, immutable"
-          upload "$DMG" "Mind-latest.dmg" application/x-apple-diskimage "public, max-age=60"
-
-          # A tiny manifest, so a future "check for updates" has something to read.
-          cat > latest.json <<JSON
-          {
-            "version": "$VERSION",
-            "url": "https://$TIGRIS_BUCKET.t3.storage.dev/Mind-$VERSION.dmg",
-            "sha256": "${{ steps.dmg.outputs.sha256 }}",
-            "size": "${{ steps.dmg.outputs.size }}",
-            "published": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "commit": "$GITHUB_SHA"
-          }
-          JSON
-          upload latest.json "latest.json" application/json "public, max-age=60"
+          if [[ "$CHANNEL" == "nightly" ]]; then
+            # Replaced wholesale rather than edited, so the tag always points at
+            # the commit its assets were actually built from.
+            gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
+            gh release create nightly "$DMG" "$DMG.sha256" \
+              --title "Mind $VERSION (main)" \
+              --notes-file notes.md \
+              --target "$GITHUB_SHA" \
+              --prerelease
+          else
+            gh release create "v$VERSION" "$DMG" "$DMG.sha256" \
+              --title "Mind $VERSION" \
+              --notes-file notes.md \
+              --target "$GITHUB_SHA" \
+              --generate-notes \
+              --latest
+          fi
 
       - name: Summary
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          BASE="https://$TIGRIS_BUCKET.t3.storage.dev"
+          VERSION="${{ steps.plan.outputs.version }}"
+          if [[ "${{ steps.plan.outputs.channel }}" == "nightly" ]]; then
+            URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/nightly"
+          else
+            URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/v$VERSION"
+          fi
           {
             echo "## Mind $VERSION"
             echo
+            echo "Signed with a Developer ID, notarized by Apple, and stapled."
+            echo
             echo "| | |"
             echo "| --- | --- |"
-            echo "| Download | [$BASE/Mind-$VERSION.dmg]($BASE/Mind-$VERSION.dmg) |"
-            echo "| Latest alias | [$BASE/Mind-latest.dmg]($BASE/Mind-latest.dmg) |"
-            echo "| Manifest | [$BASE/latest.json]($BASE/latest.json) |"
-            echo "| Size | ${{ steps.dmg.outputs.size }} |"
-            echo "| SHA-256 | \`${{ steps.dmg.outputs.sha256 }}\` |"
+            echo "| Release | $URL |"
+            echo "| Channel | ${{ steps.plan.outputs.channel }} |"
+            echo "| Size | ${{ steps.sums.outputs.size }} |"
+            echo "| SHA-256 | \`${{ steps.sums.outputs.sha256 }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Keep the DMG as a build artifact
-        uses: actions/upload-artifact@v5
-        with:
-          name: Mind-${{ steps.version.outputs.version }}
-          path: ${{ steps.dmg.outputs.dmg }}
-          retention-days: 30
+      - name: Remove the signing keychain
+        if: always()
+        run: ./scripts/ci-signing.sh --cleanup
