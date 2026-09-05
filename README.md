@@ -117,8 +117,17 @@ shasum -a 256 Mind-1.2.0.dmg          # matches the checksum on the release
 xcrun stapler validate Mind-1.2.0.dmg # the ticket travels inside the file
 ```
 
-Releasing by hand, the secrets CI needs, and what to do when Apple rejects a
-submission are all in [docs/releasing.md](docs/releasing.md).
+Setting up a fork of this to notarize is one script:
+
+```sh
+./scripts/setup-ci-secrets.sh
+```
+
+It walks through the Developer ID certificate and the App Store Connect API key,
+checking each value against Apple before storing it rather than letting a
+mistyped password surface inside a CI runner ten minutes later. Releasing by
+hand, and what to do when Apple rejects a submission, are in
+[docs/releasing.md](docs/releasing.md).
 
 ## How it behaves
 

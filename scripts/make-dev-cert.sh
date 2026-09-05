@@ -43,12 +43,21 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
 	-addext "extendedKeyUsage=critical,codeSigning" \
 	2>/dev/null
 
-# -legacy/-macalg sha1: OpenSSL 3 defaults to a PKCS#12 MAC that Apple's
-# `security import` cannot verify, which fails with a misleading "wrong
-# password?" error.
+# -macalg sha1 and the old PBE ciphers: OpenSSL 3 defaults to a PKCS#12 MAC
+# that Apple's `security import` cannot verify, which fails with a misleading
+# "wrong password?" error.
+#
+# -legacy is needed to reach those ciphers on OpenSSL 3, but it does not exist
+# on the LibreSSL that ships with macOS, which rejects the whole command. Which
+# `openssl` is first in PATH varies from Mac to Mac, so ask rather than assume.
+LEGACY=()
+if openssl pkcs12 -help 2>&1 | grep -q -- '-legacy'; then
+	LEGACY=(-legacy)
+fi
+
 openssl pkcs12 -export -out "$WORK/identity.p12" \
 	-inkey "$WORK/key.pem" -in "$WORK/cert.pem" \
-	-legacy -macalg sha1 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES \
+	${LEGACY[@]+"${LEGACY[@]}"} -macalg sha1 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES \
 	-passout pass: 2>/dev/null
 
 echo "==> Importing into your login keychain"
