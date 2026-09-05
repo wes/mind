@@ -1,0 +1,61 @@
+name: Bug report
+description: Something in Mind behaves wrongly
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you see, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: build
+    attributes:
+      label: Which build
+      options:
+        - A release DMG
+        - Built locally from source
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Mind version
+      description: Menu bar item → Preferences, or `defaults read /Applications/Mind.app/Contents/Info CFBundleShortVersionString`
+      placeholder: "1.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "15.2 on Apple Silicon"
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnose
+    attributes:
+      label: Diagnostics
+      description: |
+        If this is about the wrong events showing (or none at all), please include the diagnostic dump.
+        Launch through `open`, not directly — macOS attributes calendar access to the responsible process.
+        Feel free to redact event titles.
+      value: |
+        <details><summary>MIND_DIAGNOSE output</summary>
+
+        ```
+        # open -n --env MIND_DIAGNOSE=/tmp/mind.txt /Applications/Mind.app && sleep 3 && cat /tmp/mind.txt
+        ```
+
+        </details>
+
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: Helpful for anything visual — drag an image in here.

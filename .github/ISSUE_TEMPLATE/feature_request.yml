@@ -1,0 +1,32 @@
+name: Idea
+description: Suggest something Mind should do
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Mind's whole value is that you can ignore it. Ideas that demand attention —
+        notifications, sounds, modal windows, badges — work against that, and it only
+        ever reads your calendar, so it will never create or edit events.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the problem
+      description: What happens today that isn't working for you?
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: How would Mind behave instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: calm
+    attributes:
+      label: Does it stay calm?
+      description: Could this be noticed from the corner of your eye rather than demanding a look?
