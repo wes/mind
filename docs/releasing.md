@@ -50,6 +50,12 @@ covers the copy inside it, but the moment someone drags that copy to
 `/Applications` it is a separate file with no ticket of its own — and on a
 machine that cannot reach Apple, Gatekeeper then has nothing to check.
 
+`make-dmg.sh` also signs the disk image, before it is notarized. A ticket is
+not a signature: stapling one to an unsigned image leaves Gatekeeper with
+nothing to evaluate, and `spctl --assess` reports `no usable signature` on an
+image Apple accepted minutes earlier. The order matters too — signing after
+notarization would invalidate the stapled ticket.
+
 For local runs, `notarize.sh` reads a stored keychain profile.
 `./scripts/setup-ci-secrets.sh --notary` offers to create it at the end; to do
 it yourself:

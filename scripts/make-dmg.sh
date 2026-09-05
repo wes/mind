@@ -78,6 +78,23 @@ hdiutil create \
 
 rm -rf "$STAGING"
 
+# Sign the disk image itself, not just the app inside it.
+#
+# Stapling a notarization ticket to an unsigned image is not enough: the ticket
+# is not a signature, so Gatekeeper has nothing to evaluate and
+# `spctl --assess` reports "no usable signature" on an image Apple accepted
+# minutes earlier. Signing here, before notarize.sh runs, is what makes the
+# image itself verifiable — and it has to happen before notarization, because
+# signing afterwards would invalidate the stapled ticket.
+IDENTITY="$(./scripts/signing-identity.sh)"
+if [[ "$IDENTITY" == "-" ]]; then
+	echo "==> Not signing the image (no identity; ad-hoc images cannot be notarised)"
+else
+	echo "==> Signing the image as: $IDENTITY"
+	codesign --force --sign "$IDENTITY" --timestamp "$DMG"
+	codesign --verify --strict "$DMG" && echo "    signature ok"
+fi
+
 SIZE="$(du -h "$DMG" | cut -f1 | tr -d ' ')"
 SHA="$(shasum -a 256 "$DMG" | cut -d' ' -f1)"
 

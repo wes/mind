@@ -41,20 +41,9 @@ done
 APP="dist/Mind.app"
 CONTENTS="$APP/Contents"
 
-# An ad-hoc signature has no stable identity: every rebuild looks like a new
-# app to macOS, which revokes calendar access and re-prompts. Any real signing
-# identity avoids that, so prefer one when the machine has it.
-#
-# Override with MIND_SIGN_IDENTITY="Some Identity", or "-" to force ad-hoc.
-if [[ -n "${MIND_SIGN_IDENTITY:-}" ]]; then
-	IDENTITY="$MIND_SIGN_IDENTITY"
-elif security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application"; then
-	IDENTITY="$(security find-identity -v -p codesigning | grep -m1 "Developer ID Application" | sed -E 's/.*"(.*)"/\1/')"
-elif security find-identity -v -p codesigning 2>/dev/null | grep -q "Mind Dev"; then
-	IDENTITY="Mind Dev"
-else
-	IDENTITY="-"
-fi
+# Shared with make-dmg.sh, so the app and the disk image around it cannot end
+# up signed by two different identities. Honours MIND_SIGN_IDENTITY.
+IDENTITY="$(scripts/signing-identity.sh)"
 
 # A release must be signed with a Developer ID and nothing else. Ad-hoc cannot
 # be notarized at all, and the self-signed "Mind Dev" certificate is trusted
