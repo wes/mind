@@ -14,6 +14,18 @@ deletes anything.
 
 ![Mind approaching a meeting](docs/approaching.png)
 
+## Install
+
+Download the latest DMG from the
+[releases page](https://github.com/wes/mind/releases/latest), open it, and drag
+Mind to your Applications folder. Builds are universal (Apple silicon and
+Intel), signed with a Developer ID and notarized by Apple, so they open without
+any warnings to click through. Requires macOS 14 or newer.
+
+Every push to `main` also publishes a
+[`nightly`](https://github.com/wes/mind/releases/tag/nightly) build, notarized
+the same way. It is replaced whenever `main` moves.
+
 ## Build and run
 
 ```sh
@@ -30,7 +42,10 @@ access and opens Preferences so you can pick which calendars to watch.
 
 `build.sh` signs with the best identity it can find: a Developer ID if the
 machine has one, otherwise a `Mind Dev` certificate, otherwise ad-hoc. Override
-with `MIND_SIGN_IDENTITY="..."`, or `"-"` to force ad-hoc.
+with `MIND_SIGN_IDENTITY="..."`, or `"-"` to force ad-hoc. Pass
+`--require-signing` to refuse anything but a Developer ID, which is what the
+release workflow does so a build that cannot be notarized fails immediately
+instead of shipping.
 
 This matters more than it looks. **An ad-hoc signature has no stable identity**,
 so every rebuild is a brand-new app as far as macOS is concerned — which revokes
@@ -73,33 +88,37 @@ identity changes, and then stops asking.
 
 ## Releases
 
-Tagging a version builds a universal DMG and publishes it:
+Everything ships from GitHub Actions, so a release is reproducible from a commit
+rather than dependent on whose laptop has which certificate.
+
+| | What triggers it | Where it lands |
+| --- | --- | --- |
+| **nightly** | any push to `main` that touches code | the rolling `nightly` pre-release, replaced each time |
+| **release** | pushing a `v*` tag | a permanent release, marked latest |
 
 ```sh
-git tag v1.0.1 && git push origin v1.0.1
+git tag v1.2.0 && git push origin v1.2.0
 ```
 
-There's also a manual run in the Actions tab if you'd rather type a version than
-make a tag. Either way the artifacts land in a public Tigris bucket:
+Both channels are built identically — universal, Developer ID signed, hardened
+runtime, notarized by Apple and stapled. That is the point of building `main`
+the same way: if notarization breaks, it breaks on an ordinary push rather than
+on the evening you were trying to ship.
 
-| | |
-| --- | --- |
-| This version | `https://mind-releases.t3.storage.dev/Mind-<version>.dmg` |
-| Always the newest | `https://mind-releases.t3.storage.dev/Mind-latest.dmg` |
-| Version manifest | `https://mind-releases.t3.storage.dev/latest.json` |
+The app and the disk image each get their own notarization ticket. Notarizing
+only the image covers the copy inside it, but once that copy is dragged to
+`/Applications` it is a separate file with no ticket of its own — and Gatekeeper
+on a machine that cannot reach Apple would then have nothing to check.
 
-The repo is private; those download links are not. `latest.json` carries the
-version, size, SHA-256 and source commit, so a future "check for updates" has
-something to read.
-
-The workflow needs two repo secrets, `TIGRIS_ACCESS_KEY_ID` and
-`TIGRIS_SECRET_ACCESS_KEY`. They belong to a Tigris access key called `mind-ci`
-scoped to Editor on the `mind-releases` bucket and nothing else. To rotate:
+To verify a download:
 
 ```sh
-tigris keys rotate <key-id>
-gh secret set TIGRIS_SECRET_ACCESS_KEY --repo wes/mind
+shasum -a 256 Mind-1.2.0.dmg          # matches the checksum on the release
+xcrun stapler validate Mind-1.2.0.dmg # the ticket travels inside the file
 ```
+
+Releasing by hand, the secrets CI needs, and what to do when Apple rejects a
+submission are all in [docs/releasing.md](docs/releasing.md).
 
 ## How it behaves
 
@@ -163,7 +182,7 @@ look the same:
 poll: 2 events, phase distant, account sync 20s ago
 ```
 
-## The panel## The panel
+## The panel
 
 - **Drag anywhere** to move it; **drag the corner grip** to resize.
 - **Right-click** for size presets, Preferences, and Quit.
@@ -247,3 +266,17 @@ Launch that one through `open`, not straight from the shell. macOS attributes
 calendar access to the *responsible* process, so a Mind started from your
 terminal inherits your terminal's calendar permission instead of its own, and
 will report `denied` even when the app itself is fully authorised.
+
+## Contributing
+
+Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers
+getting set up, the two boundaries in the code worth preserving, and what kinds
+of feature fit an app whose whole value is that you can ignore it.
+
+Security problems should go through a
+[private advisory](https://github.com/wes/mind/security/advisories/new) rather
+than a public issue — see [SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE). © 2026 Wes Edling.
