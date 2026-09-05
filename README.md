@@ -105,10 +105,12 @@ runtime, notarized by Apple and stapled. That is the point of building `main`
 the same way: if notarization breaks, it breaks on an ordinary push rather than
 on the evening you were trying to ship.
 
-The app and the disk image each get their own notarization ticket. Notarizing
-only the image covers the copy inside it, but once that copy is dragged to
-`/Applications` it is a separate file with no ticket of its own — and Gatekeeper
-on a machine that cannot reach Apple would then have nothing to check.
+The app and the disk image are each signed, and each gets its own notarization
+ticket. Notarizing only the image covers the copy inside it, but once that copy
+is dragged to `/Applications` it is a separate file with no ticket of its own —
+and Gatekeeper on a machine that cannot reach Apple would then have nothing to
+check. Signing the image matters for the same reason: a ticket is not a
+signature, and an unsigned image gives `spctl` nothing to evaluate.
 
 To verify a download:
 
